@@ -1,6 +1,30 @@
 from typing import List, Dict, Tuple, Optional
 from dataclasses import dataclass
 import csv
+import logging
+
+logger = logging.getLogger(__name__)
+
+
+MOOD_SIMILARITY = {
+    "focused": {"chill", "relaxed", "moody"},
+    "chill": {"focused", "relaxed", "moody"},
+    "relaxed": {"chill", "focused", "moody"},
+    "happy": {"intense"},
+    "intense": {"happy"},
+    "moody": {"chill", "relaxed", "focused"},
+}
+
+GENRE_SIMILARITY = {
+    "lofi": {"ambient", "jazz"},
+    "ambient": {"lofi"},
+    "jazz": {"lofi"},
+    "electronic": {"synthwave", "pop"},
+    "synthwave": {"electronic", "pop"},
+    "pop": {"synthwave", "electronic"},
+    "rock": {"electronic"},
+}
+
 
 @dataclass
 class Song:
@@ -19,6 +43,7 @@ class Song:
     danceability: float
     acousticness: float
 
+
 @dataclass
 class UserProfile:
     """
@@ -29,6 +54,7 @@ class UserProfile:
     favorite_mood: str
     target_energy: float
     likes_acoustic: bool
+
 
 class Recommender:
     """
@@ -46,63 +72,106 @@ class Recommender:
         # TODO: Implement explanation logic
         return "Explanation placeholder"
 
+
 def load_songs(csv_path: str) -> List[Dict]:
     """Load songs from a CSV file and return typed song dictionaries."""
     songs = []
     
     try:
         with open(csv_path, 'r', encoding='utf-8') as csvfile:
-            # DictReader automatically uses first row as column headers
             reader = csv.DictReader(csvfile)
             
-            # Read each row and convert numerical types
             for row in reader:
                 song = {
-                    'id': int(row['id']),                    # Integer for ID
-                    'title': row['title'],                   # String
-                    'artist': row['artist'],                 # String
-                    'genre': row['genre'],                   # String
-                    'mood': row['mood'],                     # String
-                    'energy': float(row['energy']),          # Float for math
-                    'tempo_bpm': float(row['tempo_bpm']),    # Float for math
-                    'valence': float(row['valence']),        # Float for math
-                    'danceability': float(row['danceability']),  # Float for math
-                    'acousticness': float(row['acousticness'])   # Float for math
+                    'id': int(row['id']),
+                    'title': row['title'],
+                    'artist': row['artist'],
+                    'genre': row['genre'],
+                    'mood': row['mood'],
+                    'energy': float(row['energy']),
+                    'tempo_bpm': float(row['tempo_bpm']),
+                    'valence': float(row['valence']),
+                    'danceability': float(row['danceability']),
+                    'acousticness': float(row['acousticness'])
                 }
                 songs.append(song)
         
-        print(f"✓ Loaded {len(songs)} songs from {csv_path}")
+        logger.info(f"✓ Loaded {len(songs)} songs from {csv_path}")
         return songs
     
     except FileNotFoundError:
-        print(f"✗ Error: File not found at {csv_path}")
+        logger.error(f"✗ Error: File not found at {csv_path}")
         return []
     except ValueError as e:
-        print(f"✗ Error converting numerical values: {e}")
+        logger.error(f"✗ Error converting numerical values: {e}")
         return []
     except KeyError as e:
-        print(f"✗ Error: Missing expected column {e}")
+        logger.error(f"✗ Error: Missing expected column {e}")
         return []
 
-def score_song(user_prefs: Dict, song: Dict) -> Tuple[float, List[str]]:
-    """Score one song against user preferences and return score plus reasons."""
+
+def score_song(user_prefs: Dict, song: Dict, inferred_confidence: Dict = None) -> Tuple[float, List[str], List[str]]:
+    """
+    Score one song against user preferences.
+    Returns (score, reasons, assumptions_made) where assumptions_made tracks fallback defaults used.
+    """
+    if inferred_confidence is None:
+        inferred_confidence = {}
+    
     total_points = 0.0
     reasons = []
+    assumptions = []
     
-    # ============ GENRE MATCH (max +3.0) ============
-    if song['genre'].lower() == user_prefs['genre'].lower():
+    # Use inferred preferences with confidence scores, or defaults
+    target_genre = user_prefs.get('genre')
+    genre_confidence = inferred_confidence.get('genre_confidence', 1.0)
+    genre_is_inferred = inferred_confidence.get('genre_confidence', 0.0) > 0
+    
+    target_mood = user_prefs.get('mood')
+    mood_confidence = inferred_confidence.get('mood_confidence', 1.0)
+    mood_is_inferred = inferred_confidence.get('mood_confidence', 0.0) > 0
+    
+    target_energy = user_prefs.get('energy', 0.5)
+    energy_confidence = inferred_confidence.get('energy_confidence', 1.0)
+    energy_is_inferred = inferred_confidence.get('energy_confidence', 0.0) > 0
+    
+    likes_acoustic = user_prefs.get('likes_acoustic', False)
+    acoustic_confidence = inferred_confidence.get('acoustic_confidence', 1.0)
+    acoustic_is_inferred = inferred_confidence.get('acoustic_confidence', 0.0) > 0
+    
+    song_genre = song['genre'].lower()
+    song_mood = song['mood'].lower()
+
+    # ============ GENRE MATCH (max +3.0, +1.5 for related genres) ============
+    if target_genre and song_genre == target_genre.lower():
         genre_points = 3.0
         total_points += genre_points
-        reasons.append(f"genre match: {song['genre']} (+{genre_points})")
+        confidence_label = f"(confidence: {genre_confidence:.2f})" if genre_is_inferred else "(from profile)"
+        reasons.append(f"genre match: {song['genre']} {confidence_label} (+{genre_points})")
+    elif target_genre and song_genre in GENRE_SIMILARITY.get(target_genre.lower(), set()):
+        genre_points = 1.5
+        total_points += genre_points
+        confidence_label = f"(confidence: {genre_confidence:.2f})" if genre_is_inferred else "(from profile)"
+        reasons.append(f"related genre fit: {song['genre']} ~ {target_genre} {confidence_label} (+{genre_points})")
+    elif not target_genre:
+        assumptions.append("genre preference not specified, using default")
     
-    # ============ MOOD MATCH (max +2.0) ============
-    if song['mood'].lower() == user_prefs['mood'].lower():
+    # ============ MOOD MATCH (max +2.0, +1.2 for related moods) ============
+    if target_mood and song_mood == target_mood.lower():
         mood_points = 2.0
         total_points += mood_points
-        reasons.append(f"mood match: {song['mood']} (+{mood_points})")
+        confidence_label = f"(confidence: {mood_confidence:.2f})" if mood_is_inferred else "(from profile)"
+        reasons.append(f"mood match: {song['mood']} {confidence_label} (+{mood_points})")
+    elif target_mood and song_mood in MOOD_SIMILARITY.get(target_mood.lower(), set()):
+        mood_points = 1.2
+        total_points += mood_points
+        confidence_label = f"(confidence: {mood_confidence:.2f})" if mood_is_inferred else "(from profile)"
+        reasons.append(f"related mood fit: {song['mood']} ~ {target_mood} {confidence_label} (+{mood_points})")
+    elif not target_mood:
+        assumptions.append("mood preference not specified, using default")
     
     # ============ ENERGY FIT (max +2.0, distance-based) ============
-    energy_diff = abs(song['energy'] - user_prefs['energy'])
+    energy_diff = abs(song['energy'] - target_energy)
     if energy_diff < 0.1:
         energy_points = 2.0
     elif energy_diff < 0.2:
@@ -116,24 +185,27 @@ def score_song(user_prefs: Dict, song: Dict) -> Tuple[float, List[str]]:
     
     if energy_points > 0:
         total_points += energy_points
-        reasons.append(f"energy fit: {song['energy']:.2f} vs target {user_prefs['energy']:.2f} (+{energy_points})")
+        confidence_label = f"(confidence: {energy_confidence:.2f})" if energy_is_inferred else "(from profile)"
+        reasons.append(f"energy fit: {song['energy']:.2f} vs target {target_energy:.2f} {confidence_label} (+{energy_points})")
+    
+    if not energy_is_inferred:
+        assumptions.append("energy used default value 0.5")
     
     # ============ ACOUSTIC PREFERENCE (max +1.5) ============
-    if user_prefs['likes_acoustic']:
-        # User likes acoustic: reward high acousticness (>0.7)
+    if likes_acoustic:
         if song['acousticness'] > 0.7:
             acoustic_points = 1.5
             total_points += acoustic_points
-            reasons.append(f"acoustic preference: highly acoustic (+{acoustic_points})")
+            confidence_label = f"(confidence: {acoustic_confidence:.2f})" if acoustic_is_inferred else "(from profile)"
+            reasons.append(f"acoustic preference: highly acoustic {confidence_label} (+{acoustic_points})")
     else:
-        # User dislikes acoustic: reward low acousticness (<0.3)
         if song['acousticness'] < 0.3:
             acoustic_points = 1.5
             total_points += acoustic_points
-            reasons.append(f"acoustic preference: produced/electric sound (+{acoustic_points})")
+            confidence_label = f"(confidence: {acoustic_confidence:.2f})" if acoustic_is_inferred else "(from profile)"
+            reasons.append(f"acoustic preference: produced/electric {confidence_label} (+{acoustic_points})")
     
     # ============ SECONDARY FEATURES BONUS (max +1.5) ============
-    # Valence (0-1: sad to happy) + Danceability (0-1: not danceable to very danceable)
     avg_engagement = (song['valence'] + song['danceability']) / 2.0
     if avg_engagement > 0.7:
         secondary_points = 1.5
@@ -152,31 +224,39 @@ def score_song(user_prefs: Dict, song: Dict) -> Tuple[float, List[str]]:
     max_points = 10.0
     normalized_score = min(total_points / max_points, 1.0)
     
-    return (normalized_score, reasons)
+    return (normalized_score, reasons, assumptions)
 
 
-def recommend_songs(user_prefs: Dict, songs: List[Dict], k: int = 5) -> List[Tuple[Dict, float, str]]:
-    """Rank songs by score and return top-k recommendations with explanations."""
-    # ============ STEP 1 & 2: Score every song ============
-    # Create tuples of (song, score, reasons_list) for all songs
+def recommend_songs(user_prefs: Dict, songs: List[Dict], k: int = 5, inferred_confidence: Dict = None) -> List[Tuple[Dict, float, str]]:
+    """
+    Rank songs by score and return top-k recommendations with confidence-aware explanations.
+    
+    inferred_confidence: Dict with keys like 'genre_confidence', 'mood_confidence', etc.
+    """
+    if inferred_confidence is None:
+        inferred_confidence = {}
+    
+    # Score every song
     scored_songs = []
     for song in songs:
-        score, reasons = score_song(user_prefs, song)
-        scored_songs.append((song, score, reasons))
+        score, reasons, assumptions = score_song(user_prefs, song, inferred_confidence)
+        scored_songs.append((song, score, reasons, assumptions))
     
-    # ============ STEP 3: Sort by score (highest to lowest) ============
-    # Using sorted() to preserve original song list, sorted() returns new sorted list
-    # key=lambda x: x[1] tells sorted() to sort by the score (second element)
-    # reverse=True sorts in descending order (highest scores first)
+    # Sort by score (highest to lowest)
     sorted_songs = sorted(scored_songs, key=lambda x: x[1], reverse=True)
     
-    # ============ STEP 4: Take top k and format output ============
+    # Take top k and format output
     recommendations = []
-    for song, score, reasons in sorted_songs[:k]:
-        # Format reasons into a readable explanation string
-        # Join all reasons with ", " separator
+    for song, score, reasons, assumptions in sorted_songs[:k]:
         explanation = " | ".join(reasons)
+        
+        # Append assumption notes if any
+        if assumptions:
+            assumption_note = " [Assumptions: " + ", ".join(assumptions) + "]"
+            explanation += assumption_note
+        
         recommendations.append((song, score, explanation))
     
+    logger.info(f"Generated {len(recommendations)} recommendations using preferences: {user_prefs}")
     return recommendations
 
