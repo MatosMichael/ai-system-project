@@ -41,6 +41,20 @@ pip install -r requirements.txt
 python -m src.main
 ```
 
+Rules parsing is the default, runs offline, and requires no API key. You can also select it explicitly:
+
+```bash
+PARSER_MODE=rules python -m src.main
+```
+
+Claude parsing is optional and requires your own `ANTHROPIC_API_KEY`. Set that environment variable, then run:
+
+```bash
+PARSER_MODE=llm python -m src.main
+```
+
+Claude API usage may incur charges on your account. If the key is missing, the app uses rules parsing. Failed Claude requests also fall back to rules. Resetting the conversation preserves the selected parser mode.
+
 ### Sample Interactions
 
 An example of one input is "I'm getting ready to go to the gym." The output gives 5 song reccomendations based off of that specific mood then ranks the songs on how close they relate to your mood. Along with the scoring and reasoning.
@@ -75,7 +89,7 @@ This way the design broadend its "vocabulary" and was able to relate many more w
 Run the starter tests with:
 
 ```bash
-pytest
+python -m pytest
 ```
 
 You can add more tests in `tests/test_recommender.py`.

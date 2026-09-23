@@ -1,4 +1,6 @@
-from src.recommender import Song, UserProfile, Recommender
+from dataclasses import asdict
+
+from src.recommender import Song, UserProfile, Recommender, recommend_songs
 
 def make_small_recommender() -> Recommender:
     songs = [
@@ -59,6 +61,27 @@ def test_explain_recommendation_returns_non_empty_string():
     explanation = rec.explain_recommendation(user, song)
     assert isinstance(explanation, str)
     assert explanation.strip() != ""
+    assert "genre match: pop" in explanation
+    assert "mood match: happy" in explanation
+    assert "energy fit: 0.80 vs target 0.80" in explanation
+    assert "acoustic preference: produced/electric" in explanation
+    assert "default" not in explanation.lower()
+
+
+def test_best_song_last_is_ranked_first_by_both_interfaces():
+    user = UserProfile("lofi", "chill", 0.4, True)
+    rec = make_small_recommender()
+    original_order = list(rec.songs)
+    prefs = {'genre': 'lofi', 'mood': 'chill', 'energy': 0.4, 'likes_acoustic': True}
+
+    ranked = rec.recommend(user, k=2)
+    functional = recommend_songs(prefs, [asdict(song) for song in rec.songs], k=2)
+
+    assert [song.id for song in ranked] == [2, 1]
+    assert [song['id'] for song, _, _ in functional] == [2, 1]
+    assert rec.recommend(user, k=1) == [original_order[-1]]
+    assert ranked[0] is original_order[-1]
+    assert rec.songs == original_order
 
 
 def test_behavior_change_with_inferred_profiles():

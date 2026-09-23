@@ -1,5 +1,5 @@
 from typing import List, Dict, Tuple, Optional
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 import csv
 import logging
 
@@ -65,12 +65,25 @@ class Recommender:
         self.songs = songs
 
     def recommend(self, user: UserProfile, k: int = 5) -> List[Song]:
-        # TODO: Implement recommendation logic
-        return self.songs[:k]
+        prefs = self._user_preferences(user)
+        return sorted(
+            self.songs,
+            key=lambda song: score_song(prefs, asdict(song))[0],
+            reverse=True,
+        )[:k]
 
     def explain_recommendation(self, user: UserProfile, song: Song) -> str:
-        # TODO: Implement explanation logic
-        return "Explanation placeholder"
+        _, reasons, _ = score_song(self._user_preferences(user), asdict(song))
+        return " | ".join(reasons)
+
+    @staticmethod
+    def _user_preferences(user: UserProfile) -> Dict:
+        return {
+            'genre': user.favorite_genre,
+            'mood': user.favorite_mood,
+            'energy': user.target_energy,
+            'likes_acoustic': user.likes_acoustic,
+        }
 
 
 def load_songs(csv_path: str) -> List[Dict]:
@@ -259,4 +272,3 @@ def recommend_songs(user_prefs: Dict, songs: List[Dict], k: int = 5, inferred_co
     
     logger.info(f"Generated {len(recommendations)} recommendations using preferences: {user_prefs}")
     return recommendations
-

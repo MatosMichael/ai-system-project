@@ -4,6 +4,7 @@ This is the PRIMARY execution path - conversational preference discovery is the 
 """
 
 import logging
+import os
 import sys
 from src.recommender import load_songs, recommend_songs
 from src.agent import ConversationManager, ExtractionMode, PartialUserProfile
@@ -18,6 +19,18 @@ logging.basicConfig(
     ]
 )
 logger = logging.getLogger(__name__)
+
+
+def get_parser_mode() -> ExtractionMode:
+    """Enable Claude only when explicitly requested and an API key is set."""
+    mode = os.environ.get('PARSER_MODE', 'rules').strip().lower()
+    if mode == 'llm':
+        if os.environ.get('ANTHROPIC_API_KEY', '').strip():
+            return ExtractionMode.LLM
+        logger.warning("PARSER_MODE=llm requires ANTHROPIC_API_KEY; using rules.")
+    elif mode != 'rules':
+        logger.warning("Unknown PARSER_MODE %r; using rules. Choose 'rules' or 'llm'.", mode)
+    return ExtractionMode.RULES
 
 
 def convert_partial_to_full_prefs(partial: PartialUserProfile) -> dict:
@@ -61,9 +74,8 @@ def main() -> None:
         logger.error("Failed to load songs. Exiting.")
         return
     
-    # Initialize conversation manager with rules-based extraction (reproducible, no API key needed)
-    # To use LLM-based extraction, set: mode=ExtractionMode.LLM (requires ANTHROPIC_API_KEY env var)
-    conv_manager = ConversationManager(mode=ExtractionMode.RULES)
+    parser_mode = get_parser_mode()
+    conv_manager = ConversationManager(mode=parser_mode)
     
     print_separator("🎵 AGENTIC MUSIC RECOMMENDER 🎵")
     print("  Describe your music preferences in natural language.")
@@ -105,7 +117,7 @@ def main() -> None:
             break
         elif user_input.lower() == 'reset':
             logger.info("User reset conversation")
-            conv_manager = ConversationManager(mode=ExtractionMode.RULES)
+            conv_manager = ConversationManager(mode=parser_mode)
             print("\n✓ Conversation reset. Start over!\n")
             continue
         elif not user_input:
